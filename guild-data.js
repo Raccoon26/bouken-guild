@@ -68,13 +68,26 @@ window.GuildData = (() => {
       if(/^[A-Za-z0-9_-]{11}$/.test(id||''))return id;
     }catch{}throw Error('YouTubeの動画URLを入力してください。');
   }
+  function mapsURL(value){
+    if(!value?.trim())return null;
+    const raw=value.trim();
+    try{const u=new URL(raw);
+      const valid=(['google.com','www.google.com','google.co.jp','www.google.co.jp'].includes(u.hostname)&&/^\/maps(?:[/?#]|$)/.test(u.pathname+u.search+u.hash))||
+        ['maps.google.com','maps.google.co.jp','maps.app.goo.gl'].includes(u.hostname)||(u.hostname==='goo.gl'&&u.pathname.startsWith('/maps/'));
+      if(valid&&u.protocol==='https:'&&!u.username&&!u.password&&!u.port&&raw.length<=2048&&!/[\s<>"\\]/.test(raw)&&raw.startsWith('https://'))return u.href;
+    }catch{}throw Error('Googleマップの共有リンク（https://から始まるURL）を入力してください。');
+  }
   function same(row,payload){return Object.entries(payload).every(([k,v])=>JSON.stringify(row[k])===JSON.stringify(v));}
   async function cleanup(path){const {error}=await GuildMedia.remove(path,bucket);return error?'以前の写真を削除できませんでした。運営者にお問い合わせください。':'';}
   async function save(op,fields,entries=[]){
     const author=owner();if(op.author!==author)throw Error('ログイン中のアカウントが変わりました。日誌一覧から開き直してください。');
     if(!Array.isArray(entries)||entries.length>10)throw Error('写真は10枚までです。');
-    const payload={title:fields.title.trim(),content:fields.content.trim(),adventure_date:fields.adventure_date,prefecture:fields.prefecture,place:fields.place.trim(),tags:fields.tags,likes_enabled:!!fields.likes_enabled,comments_enabled:!!fields.comments_enabled,published:true,youtube_video_id:youtubeID(fields.youtube_url),image_paths:[]};
+    const payload={title:fields.title.trim(),content:fields.content.trim(),adventure_date:fields.adventure_date,prefecture:fields.prefecture,place:fields.place.trim(),tags:fields.tags,likes_enabled:!!fields.likes_enabled,comments_enabled:!!fields.comments_enabled,published:true,youtube_video_id:youtubeID(fields.youtube_url),image_paths:[],maps_url:mapsURL(fields.maps_url)};
     if(!payload.title||payload.title.length>120||!payload.content||payload.content.length>20000||payload.tags.length>10)throw Error('タイトル・本文・タグの入力をご確認ください。');
+    const kind=op.base?.post_kind||fields.post_kind||'journal';
+    if(!['journal','free','videos'].includes(kind))throw Error('投稿先が正しくありません。');
+    if(kind==='videos'&&!payload.youtube_video_id)throw Error('おすすめするYouTube動画のURLを入力してください。');
+    if(!op.base)payload.post_kind=kind;
     op.uploads ||= new Map();
     // A stable per-blob path is retained across retries and uncertain DB responses.
     for(const entry of entries){
@@ -130,5 +143,5 @@ window.GuildData = (() => {
     const {error}=await client().from('journal_comments').delete().eq('id',id).eq('author_id',author);
     if(error) throw fail(error);
   }
-  return {list,members,one,preparePhoto,youtubeID,save,remove,social,like,comment,deleteComment};
+  return {list,members,one,preparePhoto,youtubeID,mapsURL,save,remove,social,like,comment,deleteComment};
 })();

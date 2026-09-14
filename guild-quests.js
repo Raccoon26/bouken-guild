@@ -53,7 +53,7 @@ window.GuildQuests=(()=>{
    const forms=[...box.querySelectorAll('[data-claim-quest]')];
    if(forms.length){
     forms.forEach(form=>{dirty(form);form.onsubmit=ev=>ev.preventDefault();form.querySelector('button').disabled=true;});
-    const journals=await pages(()=>db().from('journals').select('id,title').eq('author_id',viewer).eq('published',true).order('created_at',{ascending:false}).order('id'));
+    const journals=await pages(()=>db().from('journals').select('id,title').eq('author_id',viewer).eq('published',true).eq('post_kind','journal').order('created_at',{ascending:false}).order('id'));
     if(root!==document.querySelector('#quest-app')||viewer!==who())return;
     forms.forEach(form=>{form.querySelector('button').disabled=false;const old=claims.find(c=>c.quest_id===form.dataset.claimQuest&&c.member_id===viewer);form.querySelector('select').innerHTML='<option value="">添付しない</option>'+journals.map(j=>`<option value="${j.id}" ${old?.journal_id===j.id?'selected':''}>${e(j.title)}</option>`).join('');form.onsubmit=ev=>{ev.preventDefault();const f=new FormData(form);act(form.querySelector('button'),()=>rpc('guild_submit_claim',{quest:form.dataset.claimQuest,proof:f.get('proof'),journal:f.get('journal')||null}));};});
    }
