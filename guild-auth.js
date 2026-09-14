@@ -1,4 +1,3 @@
-/* Supabase Auth integration. Only the browser-safe publishable key belongs here. */
 window.GuildAuth = (() => {
   const URL = 'https://idiqbtujtqadhcfpqvdq.supabase.co';
   const KEY = 'sb_publishable_eCZ7RBMUJ6RXAbutedJ4EQ_brBqifhY';
@@ -81,14 +80,12 @@ window.GuildAuth = (() => {
       await GuildMedia.upload(newPath.slice(3),blob);
     }
     try {
-      // Compare the old path so two tabs cannot silently replace each other's selection.
       let query = client.from('profiles').update({avatar_path:newPath}).eq('id',owner);
       query = oldPath ? query.eq('avatar_path',oldPath) : query.is('avatar_path',null);
       const {data,error} = await query.select(profileColumns).single();
       if (error) throw error;
       if (user?.id === owner) {profile = data; announce();}
     } catch (error) {
-      // A timed-out response may have committed. Never delete a possibly live image.
       const check = await client.from('profiles').select(profileColumns).eq('id',owner).single();
       if (!check.error && check.data.avatar_path === newPath) {
         if (user?.id === owner) {profile = check.data; announce();}
@@ -213,7 +210,6 @@ window.GuildAuth = (() => {
       client = window.supabase.createClient(URL,KEY,{global:{fetch:async (input, options = {}) => {const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),15000);const abort=()=>controller.abort();options.signal?.addEventListener('abort',abort,{once:true});if(options.signal?.aborted)controller.abort();try{return await fetch(input,{...options,signal:controller.signal});}finally{clearTimeout(timer);options.signal?.removeEventListener('abort',abort);}}},auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true,flowType:'implicit'}});
       client.auth.onAuthStateChange((event, session) => {
         if (event==='PASSWORD_RECOVERY') {mode='password';history.replaceState(null,'',redirectURL()+'#account');}
-        // Auth callbacks must return synchronously; DB work runs after the auth lock is released.
         if (['SIGNED_IN','SIGNED_OUT','PASSWORD_RECOVERY','USER_UPDATED'].includes(event)) setTimeout(()=>{
           if (event==='SIGNED_IN' && user?.id===session?.user?.id && (!ready || profile)) return;
           loadUser(session?.user||null);
