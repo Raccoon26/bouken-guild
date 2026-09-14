@@ -2,6 +2,7 @@
 window.GuildAuth = (() => {
   const URL = 'https://idiqbtujtqadhcfpqvdq.supabase.co';
   const KEY = 'sb_publishable_eCZ7RBMUJ6RXAbutedJ4EQ_brBqifhY';
+  const AVATAR_BUCKET = 'bouken-avatars';
   let client, user = null, profile = null, wallet = null;
   let ready = false, failure = '', mode = 'login', notice = '', generation = 0;
   const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -17,9 +18,20 @@ window.GuildAuth = (() => {
     if (code === 'weak_password') return 'より長く、推測されにくいパスワードを設定してください。';
     return '処理できませんでした。接続を確認して、もう一度お試しください。' + (code ? '（' + code + '）' : '');
   };
-  function refresh() {
+  function identity() {
+    return {ready, error:failure, id:user?.id || null, nickname:profile?.nickname || '', avatarPath:profile?.avatar_path || null};
+  }
+  function avatarHTML(path = profile?.avatar_path, className = '') {
+    const valid = typeof path === 'string' && /^[0-9a-f-]{36}\/[0-9a-f-]{36}\.webp$/.test(path);
+    return valid ? `<img class="guild-avatar ${className}" src="${URL}/storage/v1/object/public/${AVATAR_BUCKET}/${path}" alt="プロフィール写真" width="96" height="96">` : `<span class="guild-avatar avatar-placeholder ${className}" aria-label="プロフィール写真未設定">✦</span>`;
+  }
+  function announce() {
     const link = document.querySelector('#account-link');
-    if (link) link.textContent = user ? 'マイページ' : '登録・ログイン';
+    if (link) link.innerHTML = user ? avatarHTML(profile?.avatar_path,'avatar-small') + '<span>マイページ</span>' : '登録・ログイン';
+    window.dispatchEvent(new Event('guild-identity-changed'));
+  }
+  function refresh() {
+    announce();
     if (isAccount()) window.render?.();
   }
   async function loadUser(nextUser) {
@@ -30,10 +42,17 @@ window.GuildAuth = (() => {
     if (!user) return;
     const id = user.id;
     try {
-      const [p, w] = await Promise.all([
-        client.from('profiles').select('id,nickname,bio,joined_at,rank,title,experience').eq('id', id).single(),
-        client.from('member_wallets').select('points').eq('member_id', id).single()
-      ]);
+      let p, w;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        [p, w] = await Promise.all([
+          client.from('profiles').select('*').eq('id', id).single(),
+          client.from('member_wallets').select('points').eq('member_id', id).single()
+        ]);
+        if (ticket !== generation) return;
+        const failed = [p, w].filter(result => result.error);
+        if (!failed.length || !failed.every(result => !result.status || result.status >= 500 || result.error.code === 'PGRST116')) break;
+        if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 500));
+      }
       if (ticket !== generation) return;
       if (p.error || w.error) throw p.error || w.error;
       profile = p.data; wallet = w.data;
@@ -44,18 +63,95 @@ window.GuildAuth = (() => {
     if (ticket === generation) { ready = true; refresh(); }
   }
   const field = (label, input) => `<label class="field">${label}${input}</label>`;
+  function avatarForm() {
+    return `<section class="avatar-editor"><h3>プロフィール写真</h3><div id="avatar-preview">${avatarHTML()}</div><form id="avatar-form">${field('写真を選ぶ','<input id="avatar-file" name="avatar" type="file" accept="image/jpeg,image/png,image/webp" required><small>JPEG・PNG・WebP、5MBまで。正方形に整えて保存します。</small>')}<p class="meta">公開プロフィール用の写真です。画像URLを知っている人は閲覧できます。</p><button class="primary" type="submit">写真を保存</button><button class="button secondary" type="button" id="avatar-remove" ${profile?.avatar_path?'':'disabled'}>写真を削除</button><p id="avatar-status" role="status"></p></form></section>`;
+  }
+  // Decode and re-encode locally to bound dimensions and remove image metadata.
+  async function prepareAvatar(file) {
+    if (!file || !['image/jpeg','image/png','image/webp'].includes(file.type) || file.size > 5*1024*1024) throw Error('JPEG・PNG・WebPの画像を5MB以内で選んでください。');
+    const bitmap = await createImageBitmap(file);
+    try {
+      const canvas = document.createElement('canvas'); canvas.width = canvas.height = 512;
+      const context = canvas.getContext('2d');
+      const edge = Math.min(bitmap.width,bitmap.height);
+      context.drawImage(bitmap,(bitmap.width-edge)/2,(bitmap.height-edge)/2,edge,edge,0,0,512,512);
+      const blob = await new Promise(resolve=>canvas.toBlob(resolve,'image/webp',0.85));
+      if (!blob || blob.type !== 'image/webp' || blob.size > 2*1024*1024) throw Error('画像を処理できません。別の画像をお試しください。');
+      return blob;
+    } finally { bitmap.close(); }
+  }
+  async function saveAvatar(blob) {
+    const owner = user?.id, oldPath = profile?.avatar_path || null;
+    if (!owner || !ready || !profile) throw Error('ログインし直してください。');
+    const newPath = blob ? owner + '/' + crypto.randomUUID() + '.webp' : null;
+    if (blob) {
+      const {error} = await client.storage.from(AVATAR_BUCKET).upload(newPath,blob,{contentType:'image/webp',cacheControl:'3600',upsert:false});
+      if (error) throw Error('写真を保存できませんでした。写真の保存設定と接続をご確認ください。');
+    }
+    try {
+      // Compare the old path so two tabs cannot silently replace each other's selection.
+      let query = client.from('profiles').update({avatar_path:newPath}).eq('id',owner);
+      query = oldPath ? query.eq('avatar_path',oldPath) : query.is('avatar_path',null);
+      const {data,error} = await query.select().single();
+      if (error) throw error;
+      if (user?.id === owner) {profile = data; announce();}
+    } catch (error) {
+      // A timed-out response may have committed. Never delete a possibly live image.
+      const check = await client.from('profiles').select('*').eq('id',owner).single();
+      if (!check.error && check.data.avatar_path === newPath) {
+        if (user?.id === owner) {profile = check.data; announce();}
+      } else {
+        if (!check.error && newPath) await client.storage.from(AVATAR_BUCKET).remove([newPath]);
+        throw Error('写真の反映を確認できませんでした。マイページを再読み込みして確認してください。');
+      }
+    }
+    if (oldPath && oldPath !== newPath) {
+      const removed = await client.storage.from(AVATAR_BUCKET).remove([oldPath]);
+      if (removed.error) return '写真は更新されましたが、以前の画像を削除できませんでした。運営者にお問い合わせください。';
+    }
+    return blob ? 'プロフィール写真を保存しました。' : 'プロフィール写真を削除しました。';
+  }
+  function bindAvatar() {
+    const form = document.querySelector('#avatar-form'); if (!form) return;
+    const input = form.querySelector('#avatar-file'), status = form.querySelector('#avatar-status');
+    let prepared = null, selection = 0;
+    input.addEventListener('change',async()=>{
+      const current = ++selection; prepared = null;
+      status.textContent = 'プレビューを準備しています…';
+      try {
+        const blob = await prepareAvatar(input.files[0]); if (current !== selection) return;
+        prepared = blob;
+        const preview = document.createElement('img'), url = window.URL.createObjectURL(blob);
+        preview.className='guild-avatar'; preview.alt='保存する写真のプレビュー'; preview.width=preview.height=96;
+        preview.onload=preview.onerror=()=>window.URL.revokeObjectURL(url); preview.src=url;
+        document.querySelector('#avatar-preview')?.replaceChildren(preview);
+        status.textContent='この写真でよければ「写真を保存」を押してください。';
+      } catch(error) {if(current===selection) status.textContent=error.message;}
+    });
+    async function apply(blob) {
+      form.querySelectorAll('button,input').forEach(el=>el.disabled=true); status.textContent='保存しています…';
+      try {
+        status.textContent=await saveAvatar(blob); prepared=null; input.value='';
+        const preview=document.querySelector('#avatar-preview'); if(preview) preview.innerHTML=avatarHTML();
+      } catch(error) {status.textContent=error.message;}
+      finally {form.querySelectorAll('button,input').forEach(el=>el.disabled=false);form.querySelector('#avatar-remove').disabled=!profile?.avatar_path;}
+    }
+    form.addEventListener('submit',e=>{e.preventDefault();if(!prepared){status.textContent='写真を選び、プレビューが表示されるまでお待ちください。';return;}apply(prepared);});
+    form.querySelector('#avatar-remove').addEventListener('click',()=>{selection++;prepared=null;apply(null);});
+  }
   function page() {
     const opening = '<section class="form-wrap account-page"><span class="kicker">GUILD MEMBERSHIP</span><h1>冒険ギルドの受付</h1>';
     if (location.protocol === 'file:') return opening + '<div class="panel"><p>会員機能はウェブサイトのURLからご利用ください。</p><p>このファイルを直接開いた状態では、メール確認を完了できません。</p></div></section>';
     if (!ready) return opening + '<p role="status">会員情報を確認しています…</p></section>';
     if (!client) return opening + `<p class="error" role="alert">${escape(failure)}</p></section>`;
     if (user && mode !== 'password') {
-      return opening + `<div class="panel">${failure ? `<p class="error" role="alert">${escape(failure)}</p><button id="account-retry" class="primary">再読み込み</button>` : `<h2>${escape(profile?.nickname)}さん、おかえりなさい。</h2><dl class="account-stats"><dt>冒険者ランク</dt><dd>${escape(profile?.rank)}</dd><dt>称号</dt><dd>${escape(profile?.title)}</dd><dt>経験値</dt><dd>${escape(profile?.experience)} EXP</dd><dt>ポイント</dt><dd>${escape(wallet?.points)} GP</dd><dt>加入日</dt><dd>${escape(profile?.joined_at?.slice(0,10))}</dd></dl><p class="meta">ランク・経験値・ポイントの付与は準備中です。</p><form id="profile-form">${field('ニックネーム（名簿に公開）', `<input name="nickname" required maxlength="30" autocomplete="nickname" value="${escape(profile?.nickname)}">`)}${field('自己紹介（名簿に公開）', `<textarea name="bio" maxlength="500">${escape(profile?.bio)}</textarea>`)}<button class="primary">プロフィールを保存</button><p class="error" role="status" id="auth-status"></p></form><details><summary>自分の会員情報</summary><p class="account-id">会員ID：${escape(user.id)}</p><p>${escape(user.email)}</p></details>`}<button id="signout" class="button secondary">ログアウト</button></div></section>`;
+      return opening + `<div class="panel">${failure ? `<p class="error" role="alert">${escape(failure)}</p><button id="account-retry" class="primary">再読み込み</button>` : `<h2>${escape(profile?.nickname)}さん、おかえりなさい。</h2>${avatarForm()}<dl class="account-stats"><dt>冒険者ランク</dt><dd>${escape(profile?.rank)}</dd><dt>称号</dt><dd>${escape(profile?.title)}</dd><dt>経験値</dt><dd>${escape(profile?.experience)} EXP</dd><dt>ポイント</dt><dd>${escape(wallet?.points)} GP</dd><dt>加入日</dt><dd>${escape(profile?.joined_at?.slice(0,10))}</dd></dl><p class="meta">ランク・経験値・ポイントの付与は準備中です。</p><form id="profile-form">${field('ニックネーム（名簿に公開）', `<input name="nickname" required maxlength="30" autocomplete="nickname" value="${escape(profile?.nickname)}">`)}${field('自己紹介（名簿に公開）', `<textarea name="bio" maxlength="500">${escape(profile?.bio)}</textarea>`)}<button class="primary">プロフィールを保存</button><p class="error" role="status" id="auth-status"></p></form><details><summary>自分の会員情報</summary><p class="account-id">会員ID：${escape(user.id)}</p><p>${escape(user.email)}</p></details>`}<button id="signout" class="button secondary">ログアウト</button></div></section>`;
     }
     const signup = mode === 'signup', reset = mode === 'reset', password = mode === 'password';
     return opening + `<div class="panel"><div class="tabs">${[['login','ログイン'],['signup','新規登録']].map(([m,l])=>`<button type="button" data-auth-mode="${m}" aria-pressed="${mode===m}">${l}</button>`).join('')}</div><h2>${password?'新しいパスワード':reset?'パスワードの再設定':signup?'冒険者として登録する':'おかえりなさい'}</h2><form id="auth-form">${signup?field('ニックネーム（名簿に公開）','<input name="nickname" autocomplete="nickname" maxlength="30" required>'):''}${!password?field('メールアドレス','<input name="email" type="email" autocomplete="email" maxlength="254" required>'):''}${!reset?field('パスワード',`<input name="password" type="password" autocomplete="${signup||password?'new-password':'current-password'}" ${signup||password?'minlength="12"':''} maxlength="128" required>${signup||password?'<small>12文字以上で設定してください。</small>':''}`):''}${signup||password?field('パスワード（確認）','<input name="confirmation" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>'):''}${signup?'<p class="meta">ニックネーム・自己紹介・ランクは名簿に公開されます。メールアドレスは公開されません。</p>':''}<button class="primary" type="submit">${password?'パスワードを変更':reset?'再設定メールを送る':signup?'登録して確認メールを受け取る':'ログイン'}</button><p id="auth-status" role="status">${escape(notice)}</p></form>${mode==='login'?'<button type="button" class="text-button" data-auth-mode="reset">パスワードを忘れた方</button><button type="button" class="text-button" id="resend">確認メールを再送する</button>':''}</div></section>`;
   }
   function bind() {
+    bindAvatar();
     document.querySelectorAll('[data-auth-mode]').forEach(b => b.onclick = () => {mode = b.dataset.authMode; notice = ''; refresh();});
     document.querySelector('#account-retry')?.addEventListener('click', () => loadUser(user));
     document.querySelector('#signout')?.addEventListener('click', async e => {
@@ -72,7 +168,7 @@ window.GuildAuth = (() => {
       try {
         const {data: saved, error} = await client.from('profiles').update({nickname, bio:data.get('bio').trim()}).eq('id',user.id).select().single();
         if (error) throw error;
-        profile = saved; status.textContent = 'プロフィールを保存しました。';
+        profile = saved; announce(); status.textContent = 'プロフィールを保存しました。';
       } catch (error) {status.textContent = errorText(error);} finally {button.disabled = false;}
     });
     document.querySelector('#auth-form')?.addEventListener('submit', async e => {
@@ -126,7 +222,10 @@ window.GuildAuth = (() => {
       client.auth.onAuthStateChange((event, session) => {
         if (event==='PASSWORD_RECOVERY') {mode='password';history.replaceState(null,'',redirectURL()+'#account');}
         // Auth callbacks must return synchronously; DB work runs after the auth lock is released.
-        if (['SIGNED_IN','SIGNED_OUT','PASSWORD_RECOVERY','USER_UPDATED'].includes(event)) setTimeout(()=>loadUser(session?.user||null),0);
+        if (['SIGNED_IN','SIGNED_OUT','PASSWORD_RECOVERY','USER_UPDATED'].includes(event)) setTimeout(()=>{
+          if (event==='SIGNED_IN' && user?.id===session?.user?.id && (!ready || profile)) return;
+          loadUser(session?.user||null);
+        },0);
       });
       const {data,error} = await client.auth.getSession();
       if(error) throw error;
@@ -138,5 +237,5 @@ window.GuildAuth = (() => {
       await loadUser(data.session?.user||null);
     } catch(error) {ready=true;failure=errorText(error);client=null;refresh();}
   }
-  return {page,bind,init};
+  return {page,bind,init,identity,avatarHTML};
 })();
