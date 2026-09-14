@@ -1,4 +1,3 @@
-/* New photos use private R2 through an authenticated Worker. Legacy paths remain readable. */
 window.GuildMedia = (() => {
   const pathRE=/^[0-9a-f-]{36}\/(?:[0-9a-f-]{36}\/)?[0-9a-f-]{36}\.webp$/;
   function base(){try{const u=new URL(window.GUILD_MEDIA_CONFIG?.workerURL);return u.protocol==='https:'&&u.pathname==='/'&&!u.search&&!u.hash?u.origin:'';}catch{return '';}}
