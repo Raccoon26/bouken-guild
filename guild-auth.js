@@ -237,5 +237,5 @@ window.GuildAuth = (() => {
       await loadUser(data.session?.user||null);
     } catch(error) {ready=true;failure=errorText(error);client=null;refresh();}
   }
-  return {page,bind,init,identity,avatarHTML};
+  return {page,bind,init,identity,avatarHTML,getClient:()=>client};
 })();

@@ -28,3 +28,6 @@ footer{background:var(--deep);color:#cccbd7;border-color:#41404e}
 #writer-identity-status{display:block;margin-top:6px}
 input[readonly]{background:#f0f1f4;color:#535261}
 @media(max-width:480px){.avatar-editor .button{margin-left:0}.avatar-editor button{width:100%}}
+
+/* Shared journal tools */
+.journal-tools,.journal-author{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.journal-tools{margin:20px 0}.journal-tools button{font:inherit;padding:8px 12px;border:1px solid #c8c6cf;border-radius:8px;cursor:pointer}.journal-author{gap:8px}.danger{color:#a3203c!important;border:1px solid #a3203c!important;background:transparent!important}.member-top .guild-avatar{width:64px;height:64px}.member>p,.comment p{white-space:pre-wrap;overflow-wrap:anywhere}.card h3,.article h1{overflow-wrap:anywhere}#social{margin-top:28px}#social .comment{padding:16px 0}#photo-status{font-size:14px}button[disabled]{opacity:.55}.article-image{max-width:100%;height:auto}
