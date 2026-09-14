@@ -1,4 +1,3 @@
-/* 権限と報酬は画面のボタンだけでなく、データベース側でも検証します。 */
 window.GuildQuests=(()=>{
  const e=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const status={pending:'確認待ち',revision:'補足をお願いします',rejected:'見送り',approved:'達成済み'};
