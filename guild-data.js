@@ -34,14 +34,13 @@ window.GuildData = (() => {
       likesEnabled:row.likes_enabled,commentsEnabled:row.comments_enabled,baseLikes:row.journal_likes?.[0]?.count||0,
       commentCount:row.journal_comments?.[0]?.count||0,cloud:true,image:''};
   }
+  function photoPaths(row){return row.image_paths|| (row.image_path?[row.image_path]:[]);}
   async function images(rows) {
-    const paths=[...new Set(rows.map(r=>r.image_path).filter(p=>pathPattern.test(p||'')))];
-    const urls=new Map();
-    for(let i=0;i<paths.length;i+=100) {
-      const {data,error}=await client().storage.from(bucket).createSignedUrls(paths.slice(i,i+100),3600);
-      if(!error) (data||[]).forEach(item=>{if(item.signedUrl) urls.set(item.path,item.signedUrl);});
-    }
-    return rows.map(r=>({...r,image:urls.get(r.image_path)||'',imageUnavailable:!!r.image_path&&!urls.has(r.image_path)}));
+    const paths=[...new Set(rows.flatMap(photoPaths))],urls=new Map();
+    for(const path of paths)if(path.startsWith('r2:')){const url=GuildMedia.url(path);if(url)urls.set(path,url);}
+    const old=paths.filter(p=>pathPattern.test(p));
+    for(let i=0;i<old.length;i+=100){const {data,error}=await client().storage.from(bucket).createSignedUrls(old.slice(i,i+100),3600);if(!error)(data||[]).forEach(p=>{if(p.signedUrl)urls.set(p.path,p.signedUrl);});}
+    return rows.map(r=>({...r,photos:photoPaths(r).map(path=>({path,url:urls.get(path)||''})),image:urls.get(photoPaths(r)[0])||'',imageUnavailable:photoPaths(r).some(p=>!urls.has(p))}));
   }
   async function list() {
     const rows=await pages(()=>client().from('journals').select(columns).eq('published',true).order('created_at',{ascending:false}).order('id'));
@@ -60,84 +59,51 @@ window.GuildData = (() => {
     const row=await raw(id);
     return row ? (await images([map(row)]))[0] : null;
   }
-  async function preparePhoto(file) {
-    if(!file || !['image/jpeg','image/png','image/webp','image/gif'].includes(file.type) || file.size>5*1024*1024) throw Error('JPEG・PNG・WebP・GIFの画像を5MB以内で選んでください。');
-    const bitmap=await createImageBitmap(file);
-    try {
-      const factor=Math.min(1,1600/Math.max(bitmap.width,bitmap.height)), canvas=document.createElement('canvas');
-      canvas.width=Math.max(1,Math.round(bitmap.width*factor));canvas.height=Math.max(1,Math.round(bitmap.height*factor));
-      canvas.getContext('2d').drawImage(bitmap,0,0,canvas.width,canvas.height);
-      const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/webp',0.85));
-      if(!blob||blob.type!=='image/webp'||blob.size>5*1024*1024) throw Error('画像を処理できません。別の画像をお試しください。');
-      return blob;
-    } finally {bitmap.close();}
+  async function preparePhoto(file){return GuildMedia.compress(file);}
+  function youtubeID(value){
+    if(!value?.trim())return null;
+    try{const u=new URL(value.trim());if(u.protocol!=='https:')throw Error();
+      let id;if(['youtu.be','www.youtu.be'].includes(u.hostname))id=u.pathname.slice(1);
+      else if(['youtube.com','www.youtube.com','m.youtube.com'].includes(u.hostname))id=u.pathname==='/watch'?u.searchParams.get('v'):u.pathname.match(/^\/(?:shorts|live|embed)\/([^/]+)\/?$/)?.[1];
+      if(/^[A-Za-z0-9_-]{11}$/.test(id||''))return id;
+    }catch{}throw Error('YouTubeの動画URLを入力してください。');
   }
-  function same(row,payload) {
-    return Object.entries(payload).every(([key,value])=>JSON.stringify(row[key])===JSON.stringify(value));
-  }
-  async function cleanup(path) {
-    if(!path) return '';
-    try {
-      const {error}=await client().storage.from(bucket).remove([path]);
-      return error ? '以前の写真を削除できませんでした。運営者にお問い合わせください。' : '';
-    } catch {return '以前の写真を削除できませんでした。運営者にお問い合わせください。';}
-  }
-  // op remains attached to the form, preserving its UUID across uncertain responses.
-  async function save(op,fields,photo,removePhoto=false) {
-    const author=owner();
-    if(op.author!==author) throw Error('ログイン中のアカウントが変わりました。日誌一覧から開き直してください。');
-    const payload={title:fields.title.trim(),content:fields.content.trim(),adventure_date:fields.adventure_date,
-      prefecture:fields.prefecture,place:fields.place.trim(),tags:fields.tags,
-      likes_enabled:!!fields.likes_enabled,comments_enabled:!!fields.comments_enabled,published:true,
-      image_path:removePhoto?null:(op.base?.image_path||null)};
-    if(!payload.title||payload.title.length>120||!payload.content||payload.content.length>20000||payload.tags.length>10) throw Error('タイトル・本文・タグの入力をご確認ください。');
-    if(photo) {
-      if(op.uploadBlob!==photo) {op.uploadPath=null;op.uploadBlob=photo;}
-      if(!op.uploadPath) {
-        const path=author+'/'+op.id+'/'+crypto.randomUUID()+'.webp';
-        const {error}=await client().storage.from(bucket).upload(path,photo,{contentType:'image/webp',upsert:false});
-        if(error) throw Error('写真をアップロードできませんでした。接続と写真の保存設定をご確認ください。');
-        op.uploadPath=path;
-      }
-      payload.image_path=op.uploadPath;
+  function same(row,payload){return Object.entries(payload).every(([k,v])=>JSON.stringify(row[k])===JSON.stringify(v));}
+  async function cleanup(path){const {error}=await GuildMedia.remove(path,bucket);return error?'以前の写真を削除できませんでした。運営者にお問い合わせください。':'';}
+  async function save(op,fields,entries=[]){
+    const author=owner();if(op.author!==author)throw Error('ログイン中のアカウントが変わりました。日誌一覧から開き直してください。');
+    if(!Array.isArray(entries)||entries.length>10)throw Error('写真は10枚までです。');
+    const payload={title:fields.title.trim(),content:fields.content.trim(),adventure_date:fields.adventure_date,prefecture:fields.prefecture,place:fields.place.trim(),tags:fields.tags,likes_enabled:!!fields.likes_enabled,comments_enabled:!!fields.comments_enabled,published:true,youtube_video_id:youtubeID(fields.youtube_url),image_paths:[]};
+    if(!payload.title||payload.title.length>120||!payload.content||payload.content.length>20000||payload.tags.length>10)throw Error('タイトル・本文・タグの入力をご確認ください。');
+    op.uploads ||= new Map();
+    // A stable per-blob path is retained across retries and uncertain DB responses.
+    for(const entry of entries){
+      if(entry.blob){if(!op.uploads.has(entry.blob)){const key=author+'/'+op.id+'/'+crypto.randomUUID()+'.webp';op.uploads.set(entry.blob,await GuildMedia.upload(key,entry.blob));}payload.image_paths.push(op.uploads.get(entry.blob));}
+      else if(photoPaths(op.base||{}).includes(entry.path))payload.image_paths.push(entry.path);
+      else throw Error('写真の選択を確認してください。');
     }
+    payload.image_path=payload.image_paths[0]||null;
     let row;
-    try {
-      if(op.base) {
-        const {data,error}=await client().from('journals').update(payload).eq('id',op.id).eq('author_id',author).eq('updated_at',op.base.updated_at).select(columns).maybeSingle();
-        if(error) throw fail(error);
-        if(!data) throw Error('別の画面で更新または削除されています。本文をコピーしてから、この日誌を開き直してください。');
-        row=data;
-      } else {
-        const {data,error}=await client().from('journals').insert({id:op.id,...payload}).select(columns).single();
-        if(error) throw fail(error);
-        row=data;
-      }
-    } catch(error) {
-      let probe;
-      try {probe=await raw(op.id);} catch {throw error;}
-      if(probe?.author_id===author && same(probe,payload)) row=probe;
-      else {
-        // Only remove a candidate proven not to be referenced by the current record.
-        if(op.uploadPath && probe?.image_path!==op.uploadPath) {await cleanup(op.uploadPath);op.uploadPath=null;}
-        throw error;
-      }
+    try{
+      let result;
+      if(op.base)result=await client().from('journals').update(payload).eq('id',op.id).eq('author_id',author).eq('updated_at',op.base.updated_at).select(columns).maybeSingle();
+      else result=await client().from('journals').insert({id:op.id,...payload}).select(columns).single();
+      if(result.error)throw fail(result.error);if(!result.data)throw Error('別の画面で更新または削除されています。本文をコピーしてから開き直してください。');row=result.data;
+    }catch(error){
+      let probe;try{probe=await raw(op.id);}catch{throw error;}
+      if(probe?.author_id===author&&same(probe,payload))row=probe;
+      else{for(const [blob,path] of op.uploads){if(!photoPaths(probe||{}).includes(path)){if(!await cleanup(path))op.uploads.delete(blob);}}throw error;}
     }
-    const warning=op.base?.image_path && op.base.image_path!==row.image_path ? await cleanup(op.base.image_path) : '';
-    // The DB write has succeeded even if a later image read fails.
-    let mapped=map(row);
-    try {mapped=(await images([mapped]))[0];} catch {mapped.imageUnavailable=!!mapped.image_path;}
+    let warning='';
+    for(const path of new Set([...photoPaths(op.base||{}),...op.uploads.values()]))if(!photoPaths(row).includes(path))warning=(await cleanup(path))||warning;
+    let mapped=map(row);try{mapped=(await images([mapped]))[0];}catch{mapped.imageUnavailable=!!mapped.image_path;}
     return {record:mapped,warning};
   }
-  async function remove(record) {
-    const author=owner();
-    if(record.member!==author) throw Error('自分の日誌だけ削除できます。');
+  async function remove(record){
+    const author=owner();if(record.member!==author)throw Error('自分の日誌だけ削除できます。');
     const {data,error}=await client().from('journals').delete().eq('id',record.id).eq('author_id',author).eq('updated_at',record.updated_at).select('id');
-    if(error || !data?.length) {
-      const probe=await raw(record.id);
-      if(probe) throw error?fail(error):Error('この日誌は更新されています。再読み込みして確認してください。');
-    }
-    return cleanup(record.image_path);
+    if(error||!data?.length){const probe=await raw(record.id);if(probe)throw error?fail(error):Error('この日誌は更新されています。再読み込みして確認してください。');}
+    let warning='';for(const path of photoPaths(record))warning=(await cleanup(path))||warning;return warning;
   }
   async function social(id) {
     const author=GuildAuth.identity().id;
@@ -164,5 +130,5 @@ window.GuildData = (() => {
     const {error}=await client().from('journal_comments').delete().eq('id',id).eq('author_id',author);
     if(error) throw fail(error);
   }
-  return {list,members,one,preparePhoto,save,remove,social,like,comment,deleteComment};
+  return {list,members,one,preparePhoto,youtubeID,save,remove,social,like,comment,deleteComment};
 })();
