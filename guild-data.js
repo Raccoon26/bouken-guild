@@ -1,4 +1,3 @@
-/* Shared journals. Authorization is enforced by Supabase grants and RLS. */
 window.GuildData = (() => {
   const bucket = 'bouken-journal-images';
   const uuidPattern = /^[0-9a-f-]{36}$/;
@@ -89,7 +88,6 @@ window.GuildData = (() => {
     if(kind==='videos'&&!payload.youtube_video_id)throw Error('おすすめするYouTube動画のURLを入力してください。');
     if(!op.base)payload.post_kind=kind;
     op.uploads ||= new Map();
-    // A stable per-blob path is retained across retries and uncertain DB responses.
     for(const entry of entries){
       if(entry.blob){if(!op.uploads.has(entry.blob)){const key=author+'/'+op.id+'/'+crypto.randomUUID()+'.webp';op.uploads.set(entry.blob,await GuildMedia.upload(key,entry.blob));}payload.image_paths.push(op.uploads.get(entry.blob));}
       else if(photoPaths(op.base||{}).includes(entry.path))payload.image_paths.push(entry.path);
