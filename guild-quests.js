@@ -21,7 +21,7 @@ window.GuildQuests=(()=>{
    let tab=location.hash.split('/')[1]||'active';
    if(['review','create'].includes(tab)&&!manager||tab==='admin'&&role!=='owner')tab='active';
    const tabs=[['active','募集中'],['mine','自分の申請'],...(manager?[['review','達成の確認'],['create','クエストを作る'],['archive','終了したクエスト']]:[]),...(role==='owner'?[['admin','管理者の指定']]:[])];
-   root.innerHTML=`<span class="kicker">クエスト掲示板</span><h1>冒険クエスト</h1><p class="sub">冒険を報告して、ギルドの経験値を積み重ねよう。</p><nav class="tabs">${tabs.map(([id,label])=>`<a class="button ${tab===id?'':'secondary'}" href="#quests/${id}">${label}</a>`).join('')}</nav><p class="meta">期限は日本時間です。承認されたクエストのEXPが一度だけ加算されます。ランクの昇格基準は準備中です。</p><div id="quest-content"></div><p id="quest-message" role="status"></p>`;
+   root.innerHTML=`<span class="kicker">クエスト掲示板</span><h1>冒険クエスト</h1><p class="sub">冒険を報告して、ギルドの経験値を積み重ねよう。</p><nav class="tabs">${tabs.map(([id,label])=>`<a class="button ${tab===id?'':'secondary'}" href="#quests/${id}">${label}</a>`).join('')}</nav><p class="meta">期限は日本時間です。承認されたクエストのEXPが一度だけ加算されます。累計EXPに応じてランクと称号が更新されます。</p><div id="quest-content"></div><p id="quest-message" role="status"></p>`;
    const box=root.querySelector('#quest-content');
    const message=error=>{root.querySelector('#quest-message').textContent=error.message||String(error);};
    async function act(button,fn){button.disabled=true;try{await fn();window.guildQuestDirty=false;await load(root);}catch(error){message(error);button.disabled=false;}}

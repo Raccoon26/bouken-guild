@@ -38,3 +38,5 @@ input[readonly]{background:#f0f1f4;color:#535261}
 .quest-entry{margin:20px 0}.quest-entry textarea{min-height:130px}#quest-app .tabs{flex-wrap:wrap}#quest-app button{margin:5px 8px 5px 0}#quest-message{white-space:pre-wrap;color:#b52f4b}
 
 #nav{flex-wrap:wrap}.board-card h2{font-size:22px;margin:12px 0}.board-cover{width:100%;height:170px;object-fit:cover;border-radius:8px}.board-excerpt{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.8}.map-pin text{display:none}.map-pin:hover text,.map-pin:focus text,.map-pin[aria-pressed=true] text{display:block}.map-pin:focus{outline:2px solid #167397}@media(max-width:650px){#nav{grid-template-columns:repeat(2,1fr)}}
+
+.rank-guide{max-width:850px;margin:24px auto;overflow-x:auto}.rank-guide table{width:100%;border-collapse:collapse;margin-top:16px;font-size:14px}.rank-guide th,.rank-guide td{text-align:left;padding:10px;border-bottom:1px solid var(--line);white-space:nowrap}.rank-guide p{font-size:13px;color:var(--muted)}

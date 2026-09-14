@@ -53,11 +53,17 @@ window.GuildAuth = (() => {
         if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 500));
       }
       if (ticket !== generation) return;
-      if (p.error) throw p.error;
+      if (p.error) throw {...p.error, httpStatus:p.status};
       profile = p.data;
     } catch (e) {
       if (ticket !== generation) return;
-      failure = '会員情報を読み込めませんでした。再読み込みをお試しください。';
+      const code = /^[A-Za-z0-9_]{1,32}$/.test(e?.code||'') ? e.code :
+        (e?.httpStatus ? 'HTTP_'+Number(e.httpStatus) : 'CONNECTION');
+      const guidance = code==='PGRST116' ? '会員プロフィールが見つかりません。運営者にお問い合わせください。' :
+        ['PGRST301','PGRST303'].includes(code) ? 'ログインの有効期限を確認できません。ログアウトして、もう一度ログインしてください。' :
+        code==='42501' ? '会員情報を読み取る権限を確認できません。運営者にお問い合わせください。' :
+        '会員情報を読み込めませんでした。再読み込みをお試しください。';
+      failure = guidance + '（確認コード：'+code+'）';
     }
     if (ticket === generation) { ready = true; refresh(); }
   }
@@ -131,7 +137,7 @@ window.GuildAuth = (() => {
     if (!ready) return opening + '<p role="status">会員情報を確認しています…</p></section>';
     if (!client) return opening + `<p class="error" role="alert">${escape(failure)}</p></section>`;
     if (user && mode !== 'password') {
-      return opening + `<div class="panel">${failure ? `<p class="error" role="alert">${escape(failure)}</p><button id="account-retry" class="primary">再読み込み</button>` : `<p>おかえりなさい、${escape(profile?.nickname)}さん。</p><p><a href="#member/${user.id}">公開プロフィールを見る →</a></p>${avatarForm()}<dl class="account-stats"><dt>冒険者ランク</dt><dd>${escape(profile?.rank)}</dd><dt>称号</dt><dd>${escape(profile?.title)}</dd><dt>経験値</dt><dd>${escape(profile?.experience)} EXP</dd><dt>加入日</dt><dd>${escape(profile?.joined_at?.slice(0,10))}</dd></dl><p class="meta">クエストの達成が承認されるとEXPが加算されます。昇格基準は準備中です。</p><form id="profile-form">${field('ニックネーム（名簿に公開）', `<input name="nickname" required maxlength="30" autocomplete="nickname" value="${escape(profile?.nickname)}">`)}${field('自己紹介（名簿に公開）', `<textarea name="bio" maxlength="500">${escape(profile?.bio)}</textarea>`)}<button class="primary">プロフィールを保存</button><p class="error" role="status" id="auth-status"></p></form><details><summary>自分の会員情報</summary><p class="account-id">会員ID：${escape(user.id)}</p><p>${escape(user.email)}</p></details>`}<button id="signout" class="button secondary">ログアウト</button></div></section>`;
+      return opening + `<div class="panel">${failure ? `<p class="error" role="alert">${escape(failure)}</p><button id="account-retry" class="primary">再読み込み</button>` : `<p>おかえりなさい、${escape(profile?.nickname)}さん。</p><p><a href="#member/${user.id}">公開プロフィールを見る →</a></p>${avatarForm()}<dl class="account-stats"><dt>冒険者ランク</dt><dd>${escape(profile?.rank)}</dd><dt>称号</dt><dd>${escape(profile?.title)}</dd><dt>経験値</dt><dd>${escape(profile?.experience)} EXP</dd><dt>加入日</dt><dd>${escape(profile?.joined_at?.slice(0,10))}</dd></dl><p class="meta">新しい投稿の公開で10 EXP。クエストの達成承認でもEXPが加算されます。ランクと称号は累計EXPに応じて変わります。</p><form id="profile-form">${field('ニックネーム（名簿に公開）', `<input name="nickname" required maxlength="30" autocomplete="nickname" value="${escape(profile?.nickname)}">`)}${field('自己紹介（名簿に公開）', `<textarea name="bio" maxlength="500">${escape(profile?.bio)}</textarea>`)}<button class="primary">プロフィールを保存</button><p class="error" role="status" id="auth-status"></p></form><details><summary>自分の会員情報</summary><p class="account-id">会員ID：${escape(user.id)}</p><p>${escape(user.email)}</p></details>`}<button id="signout" class="button secondary">ログアウト</button></div></section>`;
     }
     const signup = mode === 'signup', reset = mode === 'reset', password = mode === 'password';
     return opening + `<div class="panel"><div class="tabs">${[['login','ログイン'],['signup','新規登録']].map(([m,l])=>`<button type="button" data-auth-mode="${m}" aria-pressed="${mode===m}">${l}</button>`).join('')}</div><h2>${password?'新しいパスワード':reset?'パスワードの再設定':signup?'冒険者として登録する':'おかえりなさい'}</h2><form id="auth-form">${signup?field('ニックネーム（名簿に公開）','<input name="nickname" autocomplete="nickname" maxlength="30" required>'):''}${!password?field('メールアドレス','<input name="email" type="email" autocomplete="email" maxlength="254" required>'):''}${!reset?field('パスワード',`<input name="password" type="password" autocomplete="${signup||password?'new-password':'current-password'}" ${signup||password?'minlength="12"':''} maxlength="128" required>${signup||password?'<small>12文字以上で設定してください。</small>':''}`):''}${signup||password?field('パスワード（確認）','<input name="confirmation" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>'):''}${signup?'<p class="meta">ニックネーム・自己紹介・ランクは名簿に公開されます。メールアドレスは公開されません。</p>':''}<button class="primary" type="submit">${password?'パスワードを変更':reset?'再設定メールを送る':signup?'登録して確認メールを受け取る':'ログイン'}</button><p id="auth-status" role="status">${escape(notice)}</p></form>${mode==='login'?'<button type="button" class="text-button" data-auth-mode="reset">パスワードを忘れた方</button><button type="button" class="text-button" id="resend">確認メールを再送する</button>':''}</div></section>`;
@@ -223,5 +229,5 @@ window.GuildAuth = (() => {
       await loadUser(data.session?.user||null);
     } catch(error) {ready=true;failure=errorText(error);client=null;refresh();}
   }
-  return {page,bind,init,identity,avatarHTML,getClient:()=>client};
+  return {page,bind,init,identity,avatarHTML,getClient:()=>client,reload:()=>loadUser(user)};
 })();
