@@ -101,32 +101,46 @@ window.GuildAuth = (() => {
     return blob ? 'プロフィール写真を保存しました。' : 'プロフィール写真を削除しました。';
   }
   function bindAvatar() {
-    const form = document.querySelector('#avatar-form'); if (!form) return;
-    const input = form.querySelector('#avatar-file'), status = form.querySelector('#avatar-status');
-    let prepared = null, selection = 0;
-    input.addEventListener('change',async()=>{
-      const current = ++selection; prepared = null;
-      status.textContent = 'プレビューを準備しています…';
-      try {
-        const blob = await prepareAvatar(input.files[0]); if (current !== selection) return;
-        prepared = blob;
-        const preview = document.createElement('img'), url = window.URL.createObjectURL(blob);
-        preview.className='guild-avatar'; preview.alt='保存する写真のプレビュー'; preview.width=preview.height=96;
-        preview.onload=preview.onerror=()=>window.URL.revokeObjectURL(url); preview.src=url;
-        document.querySelector('#avatar-preview')?.replaceChildren(preview);
-        status.textContent='この写真でよければ「写真を保存」を押してください。';
-      } catch(error) {if(current===selection) status.textContent=error.message;}
-    });
-    async function apply(blob) {
-      form.querySelectorAll('button,input').forEach(el=>el.disabled=true); status.textContent='保存しています…';
-      try {
-        status.textContent=await saveAvatar(blob); prepared=null; input.value='';
-        const preview=document.querySelector('#avatar-preview'); if(preview) preview.innerHTML=avatarHTML();
-      } catch(error) {status.textContent=error.message;}
-      finally {form.querySelectorAll('button,input').forEach(el=>el.disabled=false);form.querySelector('#avatar-remove').disabled=!profile?.avatar_path;}
+    const form=document.querySelector('#avatar-form');if(!form||form.dataset.bound)return;
+    form.dataset.bound='true';form.noValidate=true;
+    const input=form.querySelector('#avatar-file'),status=form.querySelector('#avatar-status');
+    const save=form.querySelector('[type="submit"]'),remove=form.querySelector('#avatar-remove');
+    form.prepend(status);status.setAttribute('aria-live','polite');
+    let prepared=null,selection=0,preparing=false,saving=false,lastError='';
+    function controls(){
+      input.disabled=saving||preparing;
+      save.disabled=saving||preparing||!prepared;
+      remove.disabled=saving||preparing||!profile?.avatar_path;
+      save.textContent=saving?'保存しています…':preparing?'写真を準備しています…':'写真を保存';
     }
-    form.addEventListener('submit',e=>{e.preventDefault();if(!prepared){status.textContent='写真を選び、プレビューが表示されるまでお待ちください。';return;}apply(prepared);});
-    form.querySelector('#avatar-remove').addEventListener('click',()=>{selection++;prepared=null;apply(null);});
+    function message(text,error=false){status.textContent=text;status.classList.toggle('error',error);}
+    function errorMessage(error){return /[\u3040-\u30ff\u3400-\u9fff]/.test(error?.message||'')?error.message:'写真を処理できませんでした。別の画像をお試しください。';}
+    controls();
+    input.addEventListener('change',async()=>{
+      const current=++selection,file=input.files?.[0];prepared=null;lastError='';preparing=!!file;controls();
+      if(!file){message('写真を選んでください。');return;}
+      message('写真を準備しています。初回は少し時間がかかります…');
+      try{
+        const blob=await prepareAvatar(file);if(current!==selection||!form.isConnected)return;
+        prepared=blob;
+        const preview=document.createElement('img'),url=window.URL.createObjectURL(blob);
+        preview.className='guild-avatar';preview.alt='保存する写真のプレビュー';preview.width=preview.height=96;
+        preview.onload=preview.onerror=()=>window.URL.revokeObjectURL(url);preview.src=url;
+        document.querySelector('#avatar-preview')?.replaceChildren(preview);
+        message('準備ができました。「写真を保存」を押してください。');
+      }catch(error){if(current===selection&&form.isConnected){lastError=errorMessage(error);message(lastError,true);input.value='';}}
+      finally{if(current===selection&&form.isConnected){preparing=false;controls();}}
+    });
+    async function apply(blob){
+      if(saving||preparing)return;saving=true;controls();message('保存しています…');
+      try{
+        const text=await saveAvatar(blob);prepared=null;input.value='';
+        if(form.isConnected){message(text);const preview=document.querySelector('#avatar-preview');if(preview)preview.innerHTML=avatarHTML();}
+      }catch(error){if(form.isConnected)message(errorMessage(error),true);}
+      finally{saving=false;if(form.isConnected)controls();}
+    }
+    form.addEventListener('submit',event=>{event.preventDefault();if(saving||preparing)return;if(!prepared){message(lastError||'写真を選んでください。',true);return;}apply(prepared);});
+    remove.addEventListener('click',()=>{if(saving||preparing)return;selection++;prepared=null;apply(null);});
   }
   function page() {
     const opening = `<section class="form-wrap account-page"><span class="kicker">${user?'冒険者名':'GUILD MEMBERSHIP'}</span><h1 id="account-title">${user?escape(profile?.nickname||'冒険者'):'冒険者登録・ログイン'}</h1>`;

@@ -1,0 +1,6 @@
+Bundled encoder from @jsquash/webp 1.5.0.
+Source: https://github.com/jamsinclair/jSquash
+webp_enc.mjs is the unmodified codec/enc/webp_enc.js renamed to .mjs.
+meta.mjs is the unmodified meta.js renamed to .mjs.
+Apache-2.0 license is included in LICENSE.
+worker.mjs is the guild-specific wrapper. No external CDN is used at runtime.
