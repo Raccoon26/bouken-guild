@@ -118,7 +118,7 @@ window.GuildData = (() => {
   }
   async function social(id) {
     const author=GuildAuth.identity().id;
-    const comments=await pages(()=>client().from('journal_comments').select('id,content,author_id,created_at,author:profiles!journal_comments_author_id_fkey(nickname,avatar_path)').eq('journal_id',id).order('created_at').order('id'));
+    const comments=await pages(()=>client().from('journal_comments').select('id,parent_id,content,author_id,created_at,author:profiles!journal_comments_author_id_fkey(nickname,avatar_path)').eq('journal_id',id).order('created_at').order('id'));
     let liked=false;
     if(author) {
       const {data,error}=await client().from('journal_likes').select('journal_id').eq('journal_id',id).eq('user_id',author).maybeSingle();
@@ -131,10 +131,15 @@ window.GuildData = (() => {
     const result=liked ? await client().from('journal_likes').delete().eq('journal_id',id).eq('user_id',author) : await client().from('journal_likes').insert({journal_id:id});
     if(result.error && result.error.code!=='23505') throw fail(result.error);
   }
-  async function comment(id,text,commentId) {
-    owner();text=text.trim();if(!text||text.length>1000) throw Error('コメントは1〜1000文字で入力してください。');
-    const {error}=await client().from('journal_comments').insert({id:commentId,journal_id:id,content:text});
-    if(error && error.code!=='23505') throw fail(error);
+  async function comment(id,text,commentId,parentId=null) {
+    const author=owner();text=text.trim();if(!text||text.length>1000)throw Error('コメントは1〜1000文字で入力してください。');
+    const payload={id:commentId,journal_id:id,content:text,parent_id:parentId};
+    const {error}=await client().from('journal_comments').insert(payload);
+    if(error){
+      const probe=await client().from('journal_comments').select('journal_id,author_id,content,parent_id').eq('id',commentId).maybeSingle();
+      if(!probe.error&&probe.data?.journal_id===id&&probe.data.author_id===author&&probe.data.content===text&&probe.data.parent_id===parentId)return;
+      throw fail(error);
+    }
   }
   async function deleteComment(id) {
     const author=owner();

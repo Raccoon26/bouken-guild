@@ -156,19 +156,31 @@ function bindDetail(r){
 async function loadSocial(r){
  const box=document.querySelector('#social'),viewer=GuildAuth.identity().id;
  if(!box)return;
- const draft=box.querySelector('textarea')?.value||'';
+ const ticket=(box.socialTicket||0)+1;box.socialTicket=ticket;
  try{
   const data=await GuildData.social(r.id);
-  if(box!==document.querySelector('#social')||viewer!==GuildAuth.identity().id)return;
+  if(box!==document.querySelector('#social')||viewer!==GuildAuth.identity().id||ticket!==box.socialTicket)return;
+  const draft=box.querySelector('textarea')?.value||'';
+  const roots=data.comments.filter(c=>!c.parent_id),children=new Map();
+  for(const c of data.comments)if(c.parent_id){if(!children.has(c.parent_id))children.set(c.parent_id,[]);children.get(c.parent_id).push(c);}
+  let target=roots.find(c=>c.id===box.dataset.replyTo)||null;
+  if(!target)delete box.dataset.replyTo;
+  function card(c,reply=false){return `<article class="comment ${reply?'comment-reply':''}" id="comment-${esc(c.id)}"><div class="journal-author">${GuildAuth.avatarHTML(c.author?.avatar_path||null,'avatar-small')}<a href="#member/${encodeURIComponent(c.author_id)}"><strong>${esc(c.author?.nickname||'冒険者')}</strong></a></div><span class="meta">${reply?'返信 · ':''}${esc(c.created_at.slice(0,10))}</span><p class="comment-content">${esc(c.content)}</p><div class="comment-actions">${viewer&&!reply?`<button type="button" class="text-button" data-reply="${esc(c.id)}">返信</button>`:''}${c.author_id===viewer?`<button type="button" class="text-button" data-delete-comment="${esc(c.id)}">${reply?'自分の返信を削除':'自分のコメントを削除'}</button>`:''}</div></article>`;}
   r.commentCount=data.comments.length;
-  box.innerHTML=`${r.likesEnabled?`<button id="cloud-like" class="like" aria-pressed="${data.liked}" ${viewer?'':'disabled'}>${data.liked?'♥':'♡'} いいね ${r.baseLikes}</button>`:'<p class="meta">いいねは無効です。</p>'}${!viewer?'<p><a href="#account">ログインして感想を残す</a></p>':''}${r.commentsEnabled?`<h2>コメント (${data.comments.length})</h2>${data.comments.map(c=>`<div class="comment"><div class="journal-author">${GuildAuth.avatarHTML(c.author?.avatar_path||null,'avatar-small')}<a href="#member/${encodeURIComponent(c.author_id)}"><strong>${esc(c.author?.nickname||'冒険者')}</strong></a></div><span class="meta">${esc(c.created_at.slice(0,10))}</span><p>${esc(c.content)}</p>${c.author_id===viewer?`<button class="text-button" data-delete-comment="${c.id}">自分のコメントを削除</button>`:''}</div>`).join('')||'<p class="sub">最初の感想を残してみませんか？</p>'}${viewer?'<form id="comment-form"><label class="field">コメント<textarea name="text" required maxlength="1000"></textarea></label><button class="primary">コメントを投稿</button></form>':''}`:'<p class="meta">コメントは無効です。</p>'}<p id="social-status" role="status"></p>`;
-  if(box.querySelector('textarea'))box.querySelector('textarea').value=draft;
-  const message=box.querySelector('#social-status');
-  box.querySelector('#cloud-like')?.addEventListener('click',async e=>{const b=e.currentTarget;b.disabled=true;try{await GuildData.like(r.id,data.liked);const latest=await GuildData.one(r.id);if(latest)r.baseLikes=latest.baseLikes;await loadSocial(r);}catch(error){message.textContent=error.message;b.disabled=false;}});
-  const commentId=crypto.randomUUID();
-  box.querySelector('#comment-form')?.addEventListener('submit',async e=>{e.preventDefault();const form=e.target,b=form.querySelector('button');b.disabled=true;try{await GuildData.comment(r.id,form.querySelector('textarea').value,commentId);form.querySelector('textarea').value='';r.commentCount++;await loadSocial(r);}catch(error){message.textContent=error.message;b.disabled=false;}});
-  box.querySelectorAll('[data-delete-comment]').forEach(b=>b.onclick=async()=>{if(!confirm('このコメントを削除しますか？'))return;b.disabled=true;try{await GuildData.deleteComment(b.dataset.deleteComment);r.commentCount=Math.max(0,r.commentCount-1);await loadSocial(r);}catch(error){message.textContent=error.message;b.disabled=false;}});
- }catch(error){if(box===document.querySelector('#social')){if(box.querySelector('#social-status')){box.querySelector('#social-status').textContent=error.message;box.querySelectorAll('button').forEach(b=>b.disabled=false);return;}box.innerHTML=`<p class="error">${esc(error.message)}</p><button id="social-retry">再読み込み</button>`;box.querySelector('button').onclick=()=>loadSocial(r);}}
+  box.innerHTML=`${r.likesEnabled?`<button id="cloud-like" class="like" aria-pressed="${data.liked}" ${viewer?'':'disabled'}>${data.liked?'♥':'♡'} いいね ${r.baseLikes}</button>`:'<p class="meta">いいねは無効です。</p>'}${!viewer?'<p><a href="#account">ログインして感想を残す</a></p>':''}${r.commentsEnabled?`<h2>コメント・返信 (${data.comments.length})</h2>${roots.map(c=>`<section class="comment-thread">${card(c)}${(children.get(c.id)||[]).map(child=>card(child,true)).join('')}</section>`).join('')||'<p class="sub">最初の感想を残してみませんか？</p>'}${viewer?'<form id="comment-form"><p id="reply-target" role="status"></p><button type="button" class="text-button" id="reply-cancel" hidden>返信をやめる</button><label class="field">コメント・返信<textarea name="text" required maxlength="1000"></textarea></label><button class="primary" type="submit">コメントを投稿</button></form>':''}`:'<p class="meta">コメントは無効です。</p>'}<p id="social-status" role="status"></p>`;
+  const form=box.querySelector('#comment-form'),textarea=form?.querySelector('textarea'),message=box.querySelector('#social-status');
+  if(textarea)textarea.value=draft;
+  let busy=false;
+  function setTarget(c){target=c;if(c)box.dataset.replyTo=c.id;else delete box.dataset.replyTo;if(!form)return;form.querySelector('#reply-target').textContent=c?(c.author?.nickname||'冒険者')+'さんへの返信':'';form.querySelector('#reply-cancel').hidden=!c;form.querySelector('[type="submit"]').textContent=c?'返信を投稿':'コメントを投稿';}
+  setTarget(target);
+  function lock(value){busy=value;box.querySelectorAll('button,textarea').forEach(el=>el.disabled=value);if(!viewer)box.querySelector('#cloud-like')?.setAttribute('disabled','');}
+  box.querySelectorAll('[data-reply]').forEach(button=>button.onclick=()=>{if(busy)return;setTarget(roots.find(c=>c.id===button.dataset.reply));textarea?.focus();});
+  box.querySelector('#reply-cancel')?.addEventListener('click',()=>{if(!busy){setTarget(null);textarea.focus();}});
+  box.querySelector('#cloud-like')?.addEventListener('click',async()=>{if(busy)return;lock(true);try{await GuildData.like(r.id,data.liked);const latest=await GuildData.one(r.id);if(latest)r.baseLikes=latest.baseLikes;await loadSocial(r);}catch(error){message.textContent=error.message;}finally{lock(false);}});
+  let pending=null;
+  form?.addEventListener('submit',async event=>{event.preventDefault();if(busy)return;const text=textarea.value.trim(),parent=target?.id||null;if(!text){message.textContent='コメントは1〜1000文字で入力してください。';return;}if(!pending||pending.text!==text||pending.parent!==parent)pending={id:crypto.randomUUID(),text,parent};lock(true);try{await GuildData.comment(r.id,text,pending.id,parent);textarea.value='';setTarget(null);pending=null;await loadSocial(r);}catch(error){message.textContent=error.message;}finally{lock(false);}});
+  box.querySelectorAll('[data-delete-comment]').forEach(button=>button.onclick=async()=>{if(busy||!confirm('このコメントを削除しますか？付いている返信は通常のコメントとして残ります。'))return;lock(true);try{await GuildData.deleteComment(button.dataset.deleteComment);await loadSocial(r);}catch(error){message.textContent=error.message;}finally{lock(false);}});
+ }catch(error){if(box===document.querySelector('#social')&&ticket===box.socialTicket){if(box.querySelector('#social-status')){box.querySelector('#social-status').textContent=error.message;return;}box.innerHTML=`<p class="error">${esc(error.message)}</p><button id="social-retry">再読み込み</button>`;box.querySelector('button').onclick=()=>loadSocial(r);}}
 }
 window.addEventListener('beforeunload',e=>{if(editorDirty||window.guildQuestDirty){e.preventDefault();e.returnValue='';}});
 
